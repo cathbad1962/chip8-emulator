@@ -238,7 +238,7 @@ impl Chip8 {
                     self.pc += 2;
                 }
             }
-            0xB => self.unimplemented(opcode), // BNNN  JP  V0, addr  -> pc = NNN + V0
+            0xB => self.pc = nnn + self.v[0] as u16, // BNNN  JP V0, addr — pc = NNN + V0
             0xC => self.unimplemented(opcode), // CXNN  RND Vx, byte  -> Vx = (random u8) & NN  (you'll need an RNG; a tiny LCG/xorshift in this crate keeps it dependency-free)
             0xE => self.unimplemented(opcode), // EX9E / EXA1  -> skip next if key Vx is / isn't pressed (reads self.keys)
             0xF => self.unimplemented(opcode), // FX07/FX0A/FX15/FX18/FX1E/FX29/FX33/FX55/FX65 -> timers, wait-for-key, I += Vx, font address, BCD, register dump/load
@@ -471,6 +471,23 @@ mod tests {
             vm.step();
         }
         assert_eq!(vm.v[0], 0xFF);
+    }
+
+    #[test]
+    fn jump_with_v0_offset() {
+        // BNNN jumps to NNN + V0. With V0 = 4 and base 0x208, land on 0x20C.
+        // 6004 V0=4, B208 JP 0x208+V0 -> pc=0x20C, where 61AB V1=0xAB lives.
+        // Layout: 0x200 6004 | 0x202 B208 | 0x204..0x20B filler | 0x20C 61AB
+        let mut rom = vec![0x60, 0x04, 0xB2, 0x08];
+        rom.resize(0x0C, 0x00); // pad up to offset 0x0C (RAM 0x20C)
+        rom.extend_from_slice(&[0x61, 0xAB]);
+        let mut vm = Chip8::new();
+        vm.load_rom(&rom);
+        vm.step(); // 6004
+        vm.step(); // B208
+        assert_eq!(vm.pc, 0x20C);
+        vm.step(); // 61AB at the jump target
+        assert_eq!(vm.v[1], 0xAB);
     }
 
     #[test]
