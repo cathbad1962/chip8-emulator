@@ -264,7 +264,26 @@ impl Chip8 {
             }
             0xB => self.pc = nnn + self.v[0] as u16, // BNNN  JP V0, addr — pc = NNN + V0
             0xC => self.v[x] = self.next_random() & nn, // CXNN  RND Vx, byte — Vx = rand() & NN
-            0xE => self.unimplemented(opcode), // EX9E / EXA1  -> skip next if key Vx is / isn't pressed (reads self.keys)
+            // EX__  key-skip family. The key to test is the value in Vx (0x0..=0xF);
+            // "skip" advances pc past one 2-byte instruction.
+            0xE => {
+                let pressed = (self.v[x] as usize) < NUM_KEYS && self.keys[self.v[x] as usize];
+                match nn {
+                    0x9E => {
+                        // EX9E  SKP  Vx — skip if that key IS pressed
+                        if pressed {
+                            self.pc += 2;
+                        }
+                    }
+                    0xA1 => {
+                        // EXA1  SKNP Vx — skip if that key is NOT pressed
+                        if !pressed {
+                            self.pc += 2;
+                        }
+                    }
+                    _ => self.unimplemented(opcode),
+                }
+            }
             0xF => self.unimplemented(opcode), // FX07/FX0A/FX15/FX18/FX1E/FX29/FX33/FX55/FX65 -> timers, wait-for-key, I += Vx, font address, BCD, register dump/load
             _ => unreachable!("top nibble is 4 bits"),
         }
@@ -556,6 +575,50 @@ mod tests {
         );
         // reseed(0) falls back to the default seed.
         assert_eq!(rnd_sequence(0xFF, 8, None), rnd_sequence(0xFF, 8, Some(0)));
+    }
+
+    #[test]
+    fn key_skip_if_pressed() {
+        // EX9E: skip when the key in Vx is pressed.
+        // 6005 V0=5, E09E SKP V0, 60FF (skipped), 61AB V1=0xAB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0xE0, 0x9E, 0x60, 0xFF, 0x61, 0xAB]);
+        vm.set_key(5, true); // after load_rom (which resets key state)
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05); // 60FF skipped
+        assert_eq!(vm.v[1], 0xAB);
+
+        // Not pressed -> no skip, 60FF runs.
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0xE0, 0x9E, 0x60, 0xFF]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFF);
+    }
+
+    #[test]
+    fn key_skip_if_not_pressed() {
+        // EXA1: skip when the key in Vx is NOT pressed.
+        // 6005, E0A1 SKNP V0, 60FF (skipped), 61AB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0xE0, 0xA1, 0x60, 0xFF, 0x61, 0xAB]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05);
+        assert_eq!(vm.v[1], 0xAB);
+
+        // Pressed -> no skip, 60FF runs.
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0xE0, 0xA1, 0x60, 0xFF]);
+        vm.set_key(5, true); // after load_rom (which resets key state)
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFF);
     }
 
     #[test]
