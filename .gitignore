@@ -1,0 +1,10 @@
+# Rust build artifacts
+/target
+/chip8-core/target
+/chip8-app/target
+
+# Trunk web build output
+/chip8-app/dist
+
+# Local, non-shared Claude Code settings
+.claude/settings.local.json

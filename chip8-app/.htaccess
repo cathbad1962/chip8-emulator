@@ -1,0 +1,18 @@
+# Drop this alongside your built files on an Apache shared host (cPanel etc.).
+#
+# Only strictly needed if your host serves .wasm as application/octet-stream and
+# you see a "streaming compile" warning in the browser console — modern Trunk
+# loaders fall back to non-streaming instantiation, so it often works without
+# this. Setting the correct MIME type restores the faster streaming path.
+AddType application/wasm .wasm
+
+# Optional: compress text-y assets (wasm gzips extremely well) if the host
+# isn't already doing it. Cuts the download a lot.
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json application/wasm
+</IfModule>
+
+# Note: you do NOT need COOP/COEP headers here. Those are only required for
+# threads / SharedArrayBuffer, which single-threaded CHIP-8 doesn't use — which
+# is convenient, because they're the one thing locked-down shared hosts are
+# worst at. (They'd come back the day you want a multi-threaded Game Boy core.)

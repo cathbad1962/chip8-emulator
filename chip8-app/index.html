@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <title>CHIP-8</title>
+    <style>
+        html, body { margin: 0; height: 100%; background: #0b0b0b; overflow: hidden; }
+        /* eframe sizes the canvas itself; just centre it. */
+        canvas { display: block; margin: 0 auto; }
+    </style>
+
+    <!-- This line is the whole Trunk integration: it builds the Rust crate in
+         this directory to wasm, runs wasm-bindgen, and injects the JS loader.
+         data-wasm-opt="2" runs wasm-opt to shrink the binary in release. -->
+    <link data-trunk rel="rust" data-wasm-opt="2" />
+</head>
+<body>
+    <!-- id MUST match the string in main.rs (`the_canvas_id`). -->
+    <canvas id="the_canvas_id"></canvas>
+</body>
+</html>

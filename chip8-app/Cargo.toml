@@ -1,0 +1,25 @@
+[package]
+name = "chip8-app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chip8-core = { path = "../chip8-core" }
+
+# We depend ONLY on eframe and read egui/wasm_bindgen/web_sys through its
+# re-exports (eframe::egui, eframe::wasm_bindgen, eframe::web_sys). Those crates
+# must all match eframe's exact version, so letting eframe pin them removes a
+# whole class of version-mismatch errors.
+#
+# ⚠ VERSION: I could not confirm the latest eframe from this sandbox. Check
+#   https://crates.io/crates/eframe and set this to the newest 0.x. The web
+#   entry point in src/main.rs follows the official `eframe_template`; if the
+#   API has shifted for your version, lift that one block from the template
+#   (see the note at the bottom of main.rs).
+eframe = "0.31"
+log = "0.4"
+
+# Web-only: drives the async eframe startup. Stable, rarely breaks across
+# eframe versions.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = "0.4"

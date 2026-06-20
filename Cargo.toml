@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["chip8-core", "chip8-app"]
+
+# Two crates, one boundary:
+#   chip8-core  — the machine. Pure Rust, zero dependencies, knows nothing
+#                 about eframe/the browser/the filesystem/time. This is the
+#                 "below the line" half. It does not change when you swap UI
+#                 frameworks or deploy targets, and it's where the Game Boy
+#                 emulator would slot in later with the same shape.
+#   chip8-app   — the shell. eframe UI + the native/web entry points. This is
+#                 the "Rust on a live website" half you're here to learn.

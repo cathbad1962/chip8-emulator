@@ -1,0 +1,16 @@
+# Trunk works with zero config; this just sets a couple of conveniences.
+[build]
+target = "index.html"
+
+[serve]
+port = 8080
+open = false
+
+# DEPLOYING TO A SUBDIRECTORY (e.g. https://yoursite.com/chip8/) rather than the
+# domain root? The asset URLs must know the prefix or you'll get a blank page
+# with 404s on the .wasm. Build with the matching public URL:
+#
+#   trunk build --release --public-url /chip8/
+#
+# (or uncomment the line below). Leave it as "/" for a root deploy.
+# public_url = "/chip8/"

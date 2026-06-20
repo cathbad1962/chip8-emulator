@@ -1,0 +1,9 @@
+[package]
+name = "chip8-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Intentionally empty. Keeping this crate dependency-free is what makes it
+# browser-agnostic and trivially unit-testable: you can `cargo test` the
+# opcodes with no UI, no wasm, no toolchain ceremony.
