@@ -23,10 +23,15 @@ Run from the repo root:
 
 ## Architecture & gotchas
 
-- **Opcodes are ~20% done.** The decoder in `chip8-core/src/lib.rs` is a `match` on the
-  top nibble; implemented families call real logic, the rest call `self.unimplemented(opcode)`,
-  which is a **deliberate silent no-op**. Unimplemented opcodes do not panic — the demo ROM
-  avoids them. When debugging a new family, temporarily `panic!` in `unimplemented` to fail loudly.
+- **All 16 opcode families are implemented.** The decoder in `chip8-core/src/lib.rs` is a `match`
+  on the top nibble. `self.unimplemented(opcode)` (a **deliberate silent no-op**) now only catches
+  *invalid* sub-opcodes within the `0x0/0x5/0x8/0xE/0xF` families. When debugging, temporarily
+  `panic!` in `unimplemented` to surface a malformed opcode instead of silently ignoring it.
+- **Two convention choices** that have an older alternative, in case a ROM misbehaves: `0x8` shifts
+  (`8XY6`/`8XYE`) shift `Vx` in place (modern CHIP-48/SUPER-CHIP) rather than `Vx = Vy >> 1`; and
+  `FX55`/`FX65` leave `I` unchanged rather than incrementing it. Both are commented at the call site.
+- **RNG (`CXNN`) is deterministic by default** — the core has no clock, so it seeds a fixed xorshift
+  in `new()`. The shell calls `reseed(u32)` after `load_rom()` to inject entropy.
 - **Timers run at exactly 60 Hz, independent of the CPU clock.** `tick_timers()` must be called
   60×/sec regardless of how often `step()` runs (the app does ~10 `step()`s per frame). Conflating
   the two clocks is the classic CHIP-8 bug.
