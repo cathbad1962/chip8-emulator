@@ -171,9 +171,26 @@ impl Chip8 {
             // bringing them online one family at a time. (The demo ROM never
             // reaches these, so the app runs cleanly until you get here.)
             // ---------------------------------------------------------------
-            0x3 => self.unimplemented(opcode), // 3XNN  SE  Vx, byte  -> skip next if Vx == NN  (pc += 2)
-            0x4 => self.unimplemented(opcode), // 4XNN  SNE Vx, byte  -> skip next if Vx != NN
-            0x5 => self.unimplemented(opcode), // 5XY0  SE  Vx, Vy    -> skip next if Vx == Vy
+            // Skip family: "skip the next instruction" means advance pc past one
+            // more 2-byte opcode (pc += 2).
+            0x3 => {
+                // 3XNN  SE  Vx, byte — skip if Vx == NN
+                if self.v[x] == nn {
+                    self.pc += 2;
+                }
+            }
+            0x4 => {
+                // 4XNN  SNE Vx, byte — skip if Vx != NN
+                if self.v[x] != nn {
+                    self.pc += 2;
+                }
+            }
+            0x5 => {
+                // 5XY0  SE  Vx, Vy — skip if Vx == Vy
+                if self.v[x] == self.v[y] {
+                    self.pc += 2;
+                }
+            }
             // 8XY_  ALU family, dispatched on the low nibble. VF is the
             // carry/borrow/shift-out flag and is written LAST, so when x == 0xF
             // the flag wins over the arithmetic result (the documented quirk).
@@ -215,7 +232,12 @@ impl Chip8 {
                 }
                 _ => self.unimplemented(opcode),
             },
-            0x9 => self.unimplemented(opcode), // 9XY0  SNE Vx, Vy    -> skip next if Vx != Vy
+            0x9 => {
+                // 9XY0  SNE Vx, Vy — skip if Vx != Vy
+                if self.v[x] != self.v[y] {
+                    self.pc += 2;
+                }
+            }
             0xB => self.unimplemented(opcode), // BNNN  JP  V0, addr  -> pc = NNN + V0
             0xC => self.unimplemented(opcode), // CXNN  RND Vx, byte  -> Vx = (random u8) & NN  (you'll need an RNG; a tiny LCG/xorshift in this crate keeps it dependency-free)
             0xE => self.unimplemented(opcode), // EX9E / EXA1  -> skip next if key Vx is / isn't pressed (reads self.keys)
@@ -376,6 +398,79 @@ mod tests {
         vm.step();
         assert_eq!(vm.v[0], 0x02);
         assert_eq!(vm.v[0xF], 1);
+    }
+
+    #[test]
+    fn skip_se_immediate() {
+        // 3XNN skips the next instruction when Vx == NN.
+        // 6005 V0=5, 3005 SE V0,5 -> skip, 60FF (skipped), 61AB V1=0xAB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x30, 0x05, 0x60, 0xFF, 0x61, 0xAB]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05); // 60FF was skipped
+        assert_eq!(vm.v[1], 0xAB); // landed on 61AB
+
+        // No skip when Vx != NN: 6005, 3006 (5 != 6), 60FF runs
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x30, 0x06, 0x60, 0xFF]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFF); // not skipped
+    }
+
+    #[test]
+    fn skip_sne_immediate() {
+        // 4XNN skips when Vx != NN.
+        // 6005, 4006 (5 != 6) -> skip, 60FF (skipped), 61AB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x40, 0x06, 0x60, 0xFF, 0x61, 0xAB]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05);
+        assert_eq!(vm.v[1], 0xAB);
+
+        // No skip when equal: 6005, 4005, 60FF runs
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x40, 0x05, 0x60, 0xFF]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFF);
+    }
+
+    #[test]
+    fn skip_se_sne_register() {
+        // 5XY0 skips when Vx == Vy.
+        // 6005, 6105, 5010 -> skip, 60FF (skipped), 62AB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x61, 0x05, 0x50, 0x10, 0x60, 0xFF, 0x62, 0xAB]);
+        for _ in 0..4 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05);
+        assert_eq!(vm.v[2], 0xAB);
+
+        // 9XY0 skips when Vx != Vy.
+        // 6005, 6106, 9010 -> skip, 60FF (skipped), 62AB
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x61, 0x06, 0x90, 0x10, 0x60, 0xFF, 0x62, 0xAB]);
+        for _ in 0..4 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x05);
+        assert_eq!(vm.v[2], 0xAB);
+
+        // 9XY0 does NOT skip when equal: 6005, 6105, 9010, 60FF runs
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x61, 0x05, 0x90, 0x10, 0x60, 0xFF]);
+        for _ in 0..4 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFF);
     }
 
     #[test]
