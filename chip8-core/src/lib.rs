@@ -58,7 +58,13 @@ pub struct Chip8 {
     delay_timer: u8,
     sound_timer: u8,
     keys: [bool; NUM_KEYS],
+    rng: u32, // xorshift state for CXNN; non-zero. See next_random()/reseed().
 }
+
+/// Fixed default RNG seed. The core has no clock, so randomness is deterministic
+/// by default (good for tests/replays). The shell can call `reseed()` after
+/// `load_rom()` to introduce real entropy.
+const RNG_SEED: u32 = 0x9E37_79B9; // any non-zero constant
 
 impl Default for Chip8 {
     fn default() -> Self {
@@ -81,7 +87,25 @@ impl Chip8 {
             delay_timer: 0,
             sound_timer: 0,
             keys: [false; NUM_KEYS],
+            rng: RNG_SEED,
         }
+    }
+
+    /// Reseed the CXNN random generator. xorshift state must be non-zero, so a
+    /// zero seed falls back to the default. Call after `load_rom()` if you want
+    /// non-deterministic randomness (e.g. seed from wall-clock time in the shell).
+    pub fn reseed(&mut self, seed: u32) {
+        self.rng = if seed == 0 { RNG_SEED } else { seed };
+    }
+
+    /// Advance the xorshift32 PRNG and return the low byte.
+    fn next_random(&mut self) -> u8 {
+        let mut x = self.rng;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.rng = x;
+        (x & 0xFF) as u8
     }
 
     /// Reset the machine and load a program at 0x200.
@@ -239,7 +263,7 @@ impl Chip8 {
                 }
             }
             0xB => self.pc = nnn + self.v[0] as u16, // BNNN  JP V0, addr — pc = NNN + V0
-            0xC => self.unimplemented(opcode), // CXNN  RND Vx, byte  -> Vx = (random u8) & NN  (you'll need an RNG; a tiny LCG/xorshift in this crate keeps it dependency-free)
+            0xC => self.v[x] = self.next_random() & nn, // CXNN  RND Vx, byte — Vx = rand() & NN
             0xE => self.unimplemented(opcode), // EX9E / EXA1  -> skip next if key Vx is / isn't pressed (reads self.keys)
             0xF => self.unimplemented(opcode), // FX07/FX0A/FX15/FX18/FX1E/FX29/FX33/FX55/FX65 -> timers, wait-for-key, I += Vx, font address, BCD, register dump/load
             _ => unreachable!("top nibble is 4 bits"),
@@ -488,6 +512,50 @@ mod tests {
         assert_eq!(vm.pc, 0x20C);
         vm.step(); // 61AB at the jump target
         assert_eq!(vm.v[1], 0xAB);
+    }
+
+    // Collect the first `count` CXNN results into V0, with mask NN and an
+    // optional reseed applied after load_rom.
+    fn rnd_sequence(nn: u8, count: usize, seed: Option<u32>) -> Vec<u8> {
+        let mut rom = Vec::new();
+        for _ in 0..count {
+            rom.push(0xC0); // CX with X=0
+            rom.push(nn);
+        }
+        let mut vm = Chip8::new();
+        vm.load_rom(&rom);
+        if let Some(s) = seed {
+            vm.reseed(s);
+        }
+        (0..count)
+            .map(|_| {
+                vm.step();
+                vm.v[0]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn rnd_respects_mask() {
+        // CX0F: every result must fit in the low nibble.
+        for v in rnd_sequence(0x0F, 64, None) {
+            assert_eq!(v & 0xF0, 0);
+        }
+        // CX00: mask of zero is always zero.
+        assert!(rnd_sequence(0x00, 16, None).iter().all(|&v| v == 0));
+    }
+
+    #[test]
+    fn rnd_is_deterministic_until_reseeded() {
+        // Default seed -> identical sequences across fresh machines.
+        assert_eq!(rnd_sequence(0xFF, 8, None), rnd_sequence(0xFF, 8, None));
+        // A different seed produces a different sequence.
+        assert_ne!(
+            rnd_sequence(0xFF, 8, None),
+            rnd_sequence(0xFF, 8, Some(0x1234_5678))
+        );
+        // reseed(0) falls back to the default seed.
+        assert_eq!(rnd_sequence(0xFF, 8, None), rnd_sequence(0xFF, 8, Some(0)));
     }
 
     #[test]
