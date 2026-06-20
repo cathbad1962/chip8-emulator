@@ -284,7 +284,48 @@ impl Chip8 {
                     _ => self.unimplemented(opcode),
                 }
             }
-            0xF => self.unimplemented(opcode), // FX07/FX0A/FX15/FX18/FX1E/FX29/FX33/FX55/FX65 -> timers, wait-for-key, I += Vx, font address, BCD, register dump/load
+            // FX__  miscellaneous family: timers, wait-for-key, index math,
+            // font lookup, BCD, and register dump/load.
+            0xF => match nn {
+                0x07 => self.v[x] = self.delay_timer, // FX07  LD Vx, DT
+                0x0A => {
+                    // FX0A  LD Vx, K — block until a key is down. We rewind pc so
+                    // this same opcode re-runs next step until set_key reports a
+                    // pressed key, then latch its index into Vx.
+                    match self.keys.iter().position(|&down| down) {
+                        Some(key) => self.v[x] = key as u8,
+                        None => self.pc -= 2,
+                    }
+                }
+                0x15 => self.delay_timer = self.v[x], // FX15  LD DT, Vx
+                0x18 => self.sound_timer = self.v[x], // FX18  LD ST, Vx
+                0x1E => self.i = self.i.wrapping_add(self.v[x] as u16), // FX1E  ADD I, Vx
+                0x29 => self.i = FONT_START as u16 + (self.v[x] & 0x0F) as u16 * 5, // FX29  LD F, Vx
+                0x33 => {
+                    // FX33  LD B, Vx — store Vx as 3 BCD digits at I, I+1, I+2.
+                    let val = self.v[x];
+                    let base = self.i as usize;
+                    self.ram[base] = val / 100;
+                    self.ram[base + 1] = (val / 10) % 10;
+                    self.ram[base + 2] = val % 10;
+                }
+                0x55 => {
+                    // FX55  LD [I], Vx — dump V0..=Vx into RAM at I (I unchanged,
+                    // modern CHIP-48/SUPER-CHIP convention).
+                    let base = self.i as usize;
+                    for reg in 0..=x {
+                        self.ram[base + reg] = self.v[reg];
+                    }
+                }
+                0x65 => {
+                    // FX65  LD Vx, [I] — load V0..=Vx from RAM at I (I unchanged).
+                    let base = self.i as usize;
+                    for reg in 0..=x {
+                        self.v[reg] = self.ram[base + reg];
+                    }
+                }
+                _ => self.unimplemented(opcode),
+            },
             _ => unreachable!("top nibble is 4 bits"),
         }
     }
@@ -619,6 +660,98 @@ mod tests {
             vm.step();
         }
         assert_eq!(vm.v[0], 0xFF);
+    }
+
+    #[test]
+    fn timers_set_and_read() {
+        // 6005 V0=5, F015 DT=V0, F107 V1=DT -> V1=5
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0xF0, 0x15, 0xF1, 0x07]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[1], 0x05);
+        assert_eq!(vm.delay_timer, 0x05);
+
+        // 600A V0=10, F018 ST=V0 -> beeping
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x0A, 0xF0, 0x18]);
+        vm.step();
+        vm.step();
+        assert_eq!(vm.sound_timer, 0x0A);
+        assert!(vm.is_beeping());
+    }
+
+    #[test]
+    fn index_add_and_font_address() {
+        // FX1E: A300 I=0x300, 6005 V0=5, F01E -> I=0x305
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0xA3, 0x00, 0x60, 0x05, 0xF0, 0x1E]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.i, 0x305);
+
+        // FX29: 6007 V0=7, F029 -> I = FONT_START + 7*5 = 0x50 + 35 = 0x73
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x07, 0xF0, 0x29]);
+        vm.step();
+        vm.step();
+        assert_eq!(vm.i as usize, FONT_START + 7 * 5);
+    }
+
+    #[test]
+    fn bcd_conversion() {
+        // 156 == 0x9C -> digits 1,5,6 at I, I+1, I+2.
+        // A300 I=0x300, 609C V0=156, F033
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0xA3, 0x00, 0x60, 0x9C, 0xF0, 0x33]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.ram[0x300], 1);
+        assert_eq!(vm.ram[0x301], 5);
+        assert_eq!(vm.ram[0x302], 6);
+    }
+
+    #[test]
+    fn register_dump_and_load() {
+        // Dump V0..=V2 to RAM at I, clear them, then load them back.
+        // 600A 610B 620C A400 F255  6000 6100 6200  A400 F265
+        let mut vm = Chip8::new();
+        vm.load_rom(&[
+            0x60, 0x0A, 0x61, 0x0B, 0x62, 0x0C, 0xA4, 0x00, 0xF2, 0x55, // dump
+            0x60, 0x00, 0x61, 0x00, 0x62, 0x00, // clear
+            0xA4, 0x00, 0xF2, 0x65, // load back
+        ]);
+        for _ in 0..10 {
+            vm.step();
+        }
+        assert_eq!(vm.ram[0x400], 0x0A);
+        assert_eq!(vm.ram[0x401], 0x0B);
+        assert_eq!(vm.ram[0x402], 0x0C);
+        assert_eq!(vm.v[0], 0x0A);
+        assert_eq!(vm.v[1], 0x0B);
+        assert_eq!(vm.v[2], 0x0C);
+        assert_eq!(vm.i, 0x400); // I left unchanged (modern convention)
+    }
+
+    #[test]
+    fn wait_for_key_blocks_until_pressed() {
+        // F00A LD V0,K at 0x200, then 61AB at 0x202.
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0xF0, 0x0A, 0x61, 0xAB]);
+        vm.step(); // no key down -> opcode rewinds pc
+        assert_eq!(vm.pc, 0x200);
+        assert_eq!(vm.v[0], 0x00);
+
+        vm.set_key(7, true);
+        vm.step(); // key 7 down -> latch into V0, advance
+        assert_eq!(vm.v[0], 7);
+        assert_eq!(vm.pc, 0x202);
+
+        vm.step(); // 61AB runs
+        assert_eq!(vm.v[1], 0xAB);
     }
 
     #[test]
