@@ -174,7 +174,47 @@ impl Chip8 {
             0x3 => self.unimplemented(opcode), // 3XNN  SE  Vx, byte  -> skip next if Vx == NN  (pc += 2)
             0x4 => self.unimplemented(opcode), // 4XNN  SNE Vx, byte  -> skip next if Vx != NN
             0x5 => self.unimplemented(opcode), // 5XY0  SE  Vx, Vy    -> skip next if Vx == Vy
-            0x8 => self.unimplemented(opcode), // 8XY0..8XYE  ALU family: set/or/and/xor/add/sub/shr/subn/shl. VF is the carry/borrow/shift-out flag — get this group right and most games work.
+            // 8XY_  ALU family, dispatched on the low nibble. VF is the
+            // carry/borrow/shift-out flag and is written LAST, so when x == 0xF
+            // the flag wins over the arithmetic result (the documented quirk).
+            0x8 => match n {
+                0x0 => self.v[x] = self.v[y],  // 8XY0  LD  Vx, Vy
+                0x1 => self.v[x] |= self.v[y], // 8XY1  OR  Vx, Vy
+                0x2 => self.v[x] &= self.v[y], // 8XY2  AND Vx, Vy
+                0x3 => self.v[x] ^= self.v[y], // 8XY3  XOR Vx, Vy
+                0x4 => {
+                    // 8XY4  ADD Vx, Vy — VF = 1 on carry
+                    let (res, carry) = self.v[x].overflowing_add(self.v[y]);
+                    self.v[x] = res;
+                    self.v[0xF] = carry as u8;
+                }
+                0x5 => {
+                    // 8XY5  SUB Vx, Vy — VF = NOT borrow (1 if Vx >= Vy)
+                    let (res, borrow) = self.v[x].overflowing_sub(self.v[y]);
+                    self.v[x] = res;
+                    self.v[0xF] = (!borrow) as u8;
+                }
+                0x6 => {
+                    // 8XY6  SHR Vx — VF = shifted-out LSB. Modern (CHIP-48/SUPER-CHIP)
+                    // convention: shift Vx in place, ignoring Vy.
+                    let lsb = self.v[x] & 1;
+                    self.v[x] >>= 1;
+                    self.v[0xF] = lsb;
+                }
+                0x7 => {
+                    // 8XY7  SUBN Vx, Vy — Vx = Vy - Vx, VF = NOT borrow (1 if Vy >= Vx)
+                    let (res, borrow) = self.v[y].overflowing_sub(self.v[x]);
+                    self.v[x] = res;
+                    self.v[0xF] = (!borrow) as u8;
+                }
+                0xE => {
+                    // 8XYE  SHL Vx — VF = shifted-out MSB (modern: shift Vx in place).
+                    let msb = self.v[x] >> 7;
+                    self.v[x] <<= 1;
+                    self.v[0xF] = msb;
+                }
+                _ => self.unimplemented(opcode),
+            },
             0x9 => self.unimplemented(opcode), // 9XY0  SNE Vx, Vy    -> skip next if Vx != Vy
             0xB => self.unimplemented(opcode), // BNNN  JP  V0, addr  -> pc = NNN + V0
             0xC => self.unimplemented(opcode), // CXNN  RND Vx, byte  -> Vx = (random u8) & NN  (you'll need an RNG; a tiny LCG/xorshift in this crate keeps it dependency-free)
@@ -238,6 +278,104 @@ mod tests {
         vm.step();
         vm.step();
         assert_eq!(vm.v[0], 0x08);
+    }
+
+    #[test]
+    fn alu_logical_ops() {
+        let mut vm = Chip8::new();
+        // 600C V0=0x0C, 610A V1=0x0A, 8011 V0 |= V1 -> 0x0E
+        vm.load_rom(&[0x60, 0x0C, 0x61, 0x0A, 0x80, 0x11]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x0E);
+
+        let mut vm = Chip8::new();
+        // 600C, 610A, 8012 AND -> 0x08
+        vm.load_rom(&[0x60, 0x0C, 0x61, 0x0A, 0x80, 0x12]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x08);
+
+        let mut vm = Chip8::new();
+        // 600C, 610A, 8013 XOR -> 0x06
+        vm.load_rom(&[0x60, 0x0C, 0x61, 0x0A, 0x80, 0x13]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x06);
+    }
+
+    #[test]
+    fn alu_add_sets_carry() {
+        let mut vm = Chip8::new();
+        // 60FF V0=0xFF, 6101 V1=0x01, 8014 V0 += V1 -> 0x00 with carry
+        vm.load_rom(&[0x60, 0xFF, 0x61, 0x01, 0x80, 0x14]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x00);
+        assert_eq!(vm.v[0xF], 1); // carry out
+
+        let mut vm = Chip8::new();
+        // 6001, 6101, 8014 -> 0x02, no carry
+        vm.load_rom(&[0x60, 0x01, 0x61, 0x01, 0x80, 0x14]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x02);
+        assert_eq!(vm.v[0xF], 0);
+    }
+
+    #[test]
+    fn alu_sub_and_subn_borrow_flag() {
+        // 8XY5: VF = 1 when NO borrow (Vx >= Vy)
+        let mut vm = Chip8::new();
+        // 6005, 6103, 8015 -> 5-3=2, VF=1
+        vm.load_rom(&[0x60, 0x05, 0x61, 0x03, 0x80, 0x15]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x02);
+        assert_eq!(vm.v[0xF], 1);
+
+        // borrow case: 3-5 wraps to 0xFE, VF=0
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x03, 0x61, 0x05, 0x80, 0x15]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0xFE);
+        assert_eq!(vm.v[0xF], 0);
+
+        // 8XY7 SUBN: Vx = Vy - Vx. 6003, 6105, 8017 -> 5-3=2, VF=1
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x03, 0x61, 0x05, 0x80, 0x17]);
+        for _ in 0..3 {
+            vm.step();
+        }
+        assert_eq!(vm.v[0], 0x02);
+        assert_eq!(vm.v[0xF], 1);
+    }
+
+    #[test]
+    fn alu_shifts_capture_lost_bit() {
+        // 8XY6 SHR: 6005 (101b), 8006 -> 2, VF=1 (lost LSB)
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x05, 0x80, 0x06]);
+        vm.step();
+        vm.step();
+        assert_eq!(vm.v[0], 0x02);
+        assert_eq!(vm.v[0xF], 1);
+
+        // 8XYE SHL: 6081 (10000001b), 800E -> 0x02, VF=1 (lost MSB)
+        let mut vm = Chip8::new();
+        vm.load_rom(&[0x60, 0x81, 0x80, 0x0E]);
+        vm.step();
+        vm.step();
+        assert_eq!(vm.v[0], 0x02);
+        assert_eq!(vm.v[0xF], 1);
     }
 
     #[test]
