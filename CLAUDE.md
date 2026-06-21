@@ -47,11 +47,12 @@ Run from the repo root:
   the blocking dialog on a worker thread, web uses the async dialog + `spawn_local`, both dropping
   bytes into a shared `pending_rom` slot that `update()` drains (rebuilding the VM + `reseed`-ing it).
   `DEMO_ROM` is still the boot ROM shown before anything is loaded.
-- Audio: a `Beeper` (`cpal`) plays a 440 Hz square wave while `is_beeping()` is true. cpal runs the
-  synth on its own callback thread; `update()` mirrors the sound-timer state into a shared atomic each
-  frame. One backend for native (ALSA/Pulse — needs `libasound2-dev` to build) and web (WebAudio via
-  cpal's `wasm-bindgen` feature). Falls back to silence if no output device opens. On web the
-  AudioContext starts suspended and resumes on the first user gesture (autoplay policy).
+- Audio: a `Beeper` plays a 440 Hz square wave while `is_beeping()` is true, with a **different backend
+  per target** (selected by `#[cfg]`, same `new()/set()` interface). Native: `cpal` (native-only dep;
+  needs `libasound2-dev` to build) synthesises on its callback thread, gated by a shared atomic.
+  Web: a `web_sys` WebAudio graph (oscillator → gain → speakers); cpal can't be used on wasm because it
+  can't satisfy the browser autoplay policy, so we drive the context ourselves and resume it on the
+  first user gesture (`pointerdown`/`keydown`). Falls back to silence if no device/context opens.
 
 ## Conventions
 
