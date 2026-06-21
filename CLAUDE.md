@@ -45,7 +45,11 @@ Run from the repo root:
   the blocking dialog on a worker thread, web uses the async dialog + `spawn_local`, both dropping
   bytes into a shared `pending_rom` slot that `update()` drains (rebuilding the VM + `reseed`-ing it).
   `DEMO_ROM` is still the boot ROM shown before anything is loaded.
-- Audio: `is_beeping()` reports sound-timer state but no actual audio output is connected.
+- Audio: a `Beeper` (`cpal`) plays a 440 Hz square wave while `is_beeping()` is true. cpal runs the
+  synth on its own callback thread; `update()` mirrors the sound-timer state into a shared atomic each
+  frame. One backend for native (ALSA/Pulse — needs `libasound2-dev` to build) and web (WebAudio via
+  cpal's `wasm-bindgen` feature). Falls back to silence if no output device opens. On web the
+  AudioContext starts suspended and resumes on the first user gesture (autoplay policy).
 
 ## Conventions
 
