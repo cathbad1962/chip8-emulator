@@ -18,6 +18,8 @@ A Cargo workspace with two crates:
 
 - Full CHIP-8 instruction set (graphics, input, sound, timers).
 - Runs natively and in the browser from one codebase.
+- **Built-in games** — a handful of public-domain (CC0) games baked into the
+  binary, reachable from the **Games ▾** dropdown (works offline, even on the web).
 - **ROM file picker** — load any `.ch8`/`.rom` (native OS dialog / browser file input).
 - **Audio** — a 440 Hz square-wave beeper driven by the sound timer (`cpal` on
   native, WebAudio on the web).
@@ -54,10 +56,18 @@ The hex keypad maps onto QWERTY so the physical block matches the original 4×4 
  Z X C V        A 0 B F
 ```
 
+## Games
+
+A few games are baked into the binary and selectable from the **Games ▾** dropdown:
+Breakout, Snake, Outlaw, Cave Explorer, and Ghost Escape. They come from the
+[Chip8 Community Archive](https://github.com/JohnEarnest/chip8Archive) and are all
+released under **Creative Commons Zero (CC0, public domain)**. See
+[`roms/README.md`](roms/README.md) for per-game attribution.
+
 ## Test ROMs
 
-The [`roms/`](roms/) directory ships a few tiny programs to exercise each I/O path
-(see [`roms/README.md`](roms/README.md) for details). Load one with **Load ROM…**:
+The [`roms/`](roms/) directory also ships tiny programs that exercise each I/O path
+(see [`roms/README.md`](roms/README.md)). Load one with **Load ROM…**:
 
 - **`ibm-logo.ch8`** — draws the "IBM" logo; a render / first-light test.
 - **`beep-test.ch8`** — beeps for ~2 seconds then stops; an audio test.
@@ -65,5 +75,6 @@ The [`roms/`](roms/) directory ships a few tiny programs to exercise each I/O pa
 
 ## License
 
-The test ROMs under `roms/` are either public domain (`ibm-logo.ch8`) or original
-to this project. See `roms/README.md`.
+The bundled games under `roms/games/` are public domain (CC0) — see
+[`roms/README.md`](roms/README.md) for sources and attribution. The test ROMs under
+`roms/` are either public domain (`ibm-logo.ch8`) or original to this project.

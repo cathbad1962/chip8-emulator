@@ -46,7 +46,9 @@ Run from the repo root:
 - ROM loading: a "Load ROM…" button (`rfd` file picker) loads real `.ch8`/`.rom` files; native runs
   the blocking dialog on a worker thread, web uses the async dialog + `spawn_local`, both dropping
   bytes into a shared `pending_rom` slot that `update()` drains (rebuilding the VM + `reseed`-ing it).
-  `DEMO_ROM` is still the boot ROM shown before anything is loaded.
+  A "Games ▾" dropdown picks from `GAMES`, built-in ROMs baked in with `include_bytes!` (`roms/games/`,
+  all CC0/public-domain from the Chip8 Community Archive); selecting one routes through the same
+  `pending_rom` slot. `DEMO_ROM` is still the boot ROM shown before anything is loaded.
 - Audio: a `Beeper` plays a 440 Hz square wave while `is_beeping()` is true, with a **different backend
   per target** (selected by `#[cfg]`, same `new()/set()` interface). Native: `cpal` (native-only dep;
   needs `libasound2-dev` to build) synthesises on its callback thread, gated by a shared atomic.

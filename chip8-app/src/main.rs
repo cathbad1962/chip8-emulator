@@ -60,6 +60,28 @@ const MAX_TIMER_CATCHUP: u32 = 4;
 /// `include_bytes!("game.ch8")` once real ROMs are running.
 const DEMO_ROM: &[u8] = &[0x60, 0x1C, 0x61, 0x0D, 0xA0, 0x78, 0xD0, 0x15, 0x12, 0x08];
 
+/// Built-in games, baked into the binary with `include_bytes!` so they ship with
+/// the app on every platform — crucially the web build, which has no filesystem
+/// to read ROMs from. They're tiny (a few hundred bytes to a few KB each), so the
+/// size cost is negligible.
+///
+/// All are from the Chip8 Community Archive (https://github.com/JohnEarnest/chip8Archive)
+/// and released under Creative Commons Zero (CC0, public domain). See
+/// `roms/README.md` for per-game attribution.
+const GAMES: &[(&str, &[u8])] = &[
+    ("Breakout", include_bytes!("../../roms/games/br8kout.ch8")),
+    ("Snake", include_bytes!("../../roms/games/snek.ch8")),
+    ("Outlaw", include_bytes!("../../roms/games/outlaw.ch8")),
+    (
+        "Cave Explorer",
+        include_bytes!("../../roms/games/caveexplorer.ch8"),
+    ),
+    (
+        "Ghost Escape",
+        include_bytes!("../../roms/games/ghostEscape.ch8"),
+    ),
+];
+
 /// CHIP-8 has a 16-key hex keypad. The conventional mapping onto a QWERTY
 /// keyboard, laid out so the physical block matches the original 4x4 pad:
 ///
@@ -256,6 +278,10 @@ struct Chip8App {
     /// Seconds of real time owed to the 60 Hz timers but not yet ticked. See
     /// [`TIMER_PERIOD`].
     timer_accumulator: f32,
+    /// Index into [`GAMES`] of the last game picked from the dropdown, for the
+    /// combo box's displayed text. `None` until a game is chosen (or after a ROM
+    /// is loaded from a file instead).
+    selected_game: Option<usize>,
 }
 
 impl Chip8App {
@@ -271,6 +297,7 @@ impl Chip8App {
             pending_rom: Arc::new(Mutex::new(None)),
             beeper: Beeper::new(),
             timer_accumulator: 0.0,
+            selected_game: None,
         }
     }
 
@@ -372,8 +399,31 @@ impl eframe::App for Chip8App {
         egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Load ROM…").clicked() {
+                    // A file load means we're no longer on a built-in game, so
+                    // clear the dropdown's selection.
+                    self.selected_game = None;
                     self.open_rom_picker(ctx);
                 }
+
+                // Built-in games. Selecting one hands its bytes to the same
+                // `pending_rom` slot the file picker uses, so the load + reseed
+                // logic at the top of `update()` handles it uniformly next frame.
+                egui::ComboBox::from_id_salt("games")
+                    .selected_text(match self.selected_game {
+                        Some(i) => GAMES[i].0,
+                        None => "Games ▾",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (i, (name, bytes)) in GAMES.iter().enumerate() {
+                            if ui
+                                .selectable_label(self.selected_game == Some(i), *name)
+                                .clicked()
+                            {
+                                self.selected_game = Some(i);
+                                *self.pending_rom.lock().unwrap() = Some(bytes.to_vec());
+                            }
+                        }
+                    });
             });
         });
 
