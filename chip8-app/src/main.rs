@@ -80,6 +80,17 @@ const GAMES: &[(&str, &[u8])] = &[
         "Ghost Escape",
         include_bytes!("../../roms/games/ghostEscape.ch8"),
     ),
+    ("Danm8ku", include_bytes!("../../roms/games/danm8ku.ch8")),
+    ("Tank!", include_bytes!("../../roms/games/tank.ch8")),
+    ("Spacejam!", include_bytes!("../../roms/games/spacejam.ch8")),
+    (
+        "Slippery Slope",
+        include_bytes!("../../roms/games/slipperyslope.ch8"),
+    ),
+    (
+        "Chipquarium",
+        include_bytes!("../../roms/games/chipquarium.ch8"),
+    ),
 ];
 
 /// CHIP-8 has a 16-key hex keypad. The conventional mapping onto a QWERTY

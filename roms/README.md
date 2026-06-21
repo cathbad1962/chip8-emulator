@@ -19,6 +19,11 @@ obligation. All target the base `chip8` platform.
 | `games/outlaw.ch8` | Outlaw | John Earnest | 2014-07-17 |
 | `games/caveexplorer.ch8` | Cave Explorer | John Earnest | 2014-06-22 |
 | `games/ghostEscape.ch8` | Ghost Escape | Tom Rintjema | 2016-10-29 |
+| `games/danm8ku.ch8` | Danm8ku (bullet hell) | buffi | 2015-10-31 |
+| `games/tank.ch8` | Tank! | Rectus | 2018-10-31 |
+| `games/spacejam.ch8` | Spacejam! | William Donnelly | 2015-10-30 |
+| `games/slipperyslope.ch8` | Slippery Slope | John Earnest | 2018-10-31 |
+| `games/chipquarium.ch8` | Chipquarium | mattmik | 2016-10-31 |
 
 ## Test ROMs
 

@@ -58,8 +58,9 @@ The hex keypad maps onto QWERTY so the physical block matches the original 4×4 
 
 ## Games
 
-A few games are baked into the binary and selectable from the **Games ▾** dropdown:
-Breakout, Snake, Outlaw, Cave Explorer, and Ghost Escape. They come from the
+Ten games are baked into the binary and selectable from the **Games ▾** dropdown:
+Breakout, Snake, Outlaw, Cave Explorer, Ghost Escape, Danm8ku, Tank!, Spacejam!,
+Slippery Slope, and Chipquarium. They come from the
 [Chip8 Community Archive](https://github.com/JohnEarnest/chip8Archive) and are all
 released under **Creative Commons Zero (CC0, public domain)**. See
 [`roms/README.md`](roms/README.md) for per-game attribution.
