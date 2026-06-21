@@ -27,6 +27,17 @@ type RomDrop = Arc<Mutex<Option<Vec<u8>>>>;
 /// a comfortable CHIP-8 speed. Tune to taste.
 const CYCLES_PER_FRAME: usize = 10;
 
+/// The CHIP-8 delay and sound timers count down at exactly 60 Hz, independent of
+/// the display's refresh rate. We accumulate real elapsed time and tick once per
+/// whole `1/60 s` so the timers stay correct on a 144 Hz monitor, a 30 Hz one,
+/// or during a stutter — never conflating the timer clock with the frame clock.
+const TIMER_PERIOD: f32 = 1.0 / 60.0;
+
+/// Cap on timer catch-up per frame. If the app was stalled (e.g. the file dialog
+/// was open for seconds), we don't want to fire hundreds of ticks at once; a few
+/// is plenty to resync without a "spiral of death".
+const MAX_TIMER_CATCHUP: u32 = 4;
+
 /// A tiny hand-written CHIP-8 program (my own bytes, not a copyrighted ROM) so
 /// the scaffold visibly proves the whole stack end-to-end on first run: it
 /// draws the built-in "8" sprite near the centre of the screen, then halts.
@@ -164,6 +175,9 @@ struct Chip8App {
     /// Square-wave output mirroring the VM's sound timer. `None` if no audio
     /// device could be opened — the emulator just runs silently.
     beeper: Option<Beeper>,
+    /// Seconds of real time owed to the 60 Hz timers but not yet ticked. See
+    /// [`TIMER_PERIOD`].
+    timer_accumulator: f32,
 }
 
 impl Chip8App {
@@ -178,6 +192,7 @@ impl Chip8App {
             vm,
             pending_rom: Arc::new(Mutex::new(None)),
             beeper: Beeper::new(),
+            timer_accumulator: 0.0,
         }
     }
 
@@ -294,10 +309,22 @@ impl eframe::App for Chip8App {
             self.vm.step();
         }
 
-        // 3. TIMERS — once per frame ≈ 60 Hz (the slow clock).
-        //    (For frame-rate-independent accuracy, accumulate ctx.input(|i| i.stable_dt)
-        //    and tick on each whole 1/60 s elapsed instead. Fine to skip for now.)
-        self.vm.tick_timers();
+        // 3. TIMERS — the slow clock, locked to a true 60 Hz regardless of the
+        //    display's frame rate. We bank the real seconds elapsed since the
+        //    last frame (`stable_dt` is eframe's smoothed frame time) and spend
+        //    them one 1/60 s tick at a time, capped so a long stall can't unleash
+        //    a flood of catch-up ticks.
+        self.timer_accumulator += ctx.input(|i| i.stable_dt);
+        let mut ticks = 0;
+        while self.timer_accumulator >= TIMER_PERIOD && ticks < MAX_TIMER_CATCHUP {
+            self.vm.tick_timers();
+            self.timer_accumulator -= TIMER_PERIOD;
+            ticks += 1;
+        }
+        // Drop any backlog beyond the cap so we don't stay perpetually behind.
+        if self.timer_accumulator > TIMER_PERIOD {
+            self.timer_accumulator = 0.0;
+        }
 
         // 3b. AUDIO — mirror the sound-timer state to the beeper. The actual
         //     sample generation happens on cpal's callback thread; here we just
