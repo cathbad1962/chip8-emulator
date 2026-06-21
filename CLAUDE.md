@@ -17,9 +17,11 @@ Run from the repo root:
 
 - Test the VM core: `cargo test -p chip8-core`
 - Run native app: `cargo run -p chip8-app`
-- Web dev server (needs `trunk`, not currently installed — `cargo install trunk`):
-  `cd chip8-app && trunk serve` → http://localhost:8080
+- Web dev server: `cd chip8-app && trunk serve` → http://localhost:8080 (trunk 0.21 is installed).
 - Web release build: `cd chip8-app && trunk build --release`
+- **Run trunk from inside `chip8-app/`, not the repo root** — the root is a virtual workspace with no
+  package, so trunk fails with "could not find the root package". Plain wasm compile-check (no bundle):
+  `cargo build -p chip8-app --target wasm32-unknown-unknown`.
 
 ## Architecture & gotchas
 
