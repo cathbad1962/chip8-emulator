@@ -41,7 +41,10 @@ Run from the repo root:
 - **eframe web entry point is version-fragile.** The wasm `main` in `chip8-app` mirrors the
   `eframe_template` for eframe 0.31. If eframe is upgraded, regenerate from the template and swap
   `Chip8App` back in.
-- ROM loading is a hard-coded demo ROM; `Chip8::load_rom(&[u8])` exists but no file picker is wired.
+- ROM loading: a "Load ROM…" button (`rfd` file picker) loads real `.ch8`/`.rom` files; native runs
+  the blocking dialog on a worker thread, web uses the async dialog + `spawn_local`, both dropping
+  bytes into a shared `pending_rom` slot that `update()` drains (rebuilding the VM + `reseed`-ing it).
+  `DEMO_ROM` is still the boot ROM shown before anything is loaded.
 - Audio: `is_beeping()` reports sound-timer state but no actual audio output is connected.
 
 ## Conventions

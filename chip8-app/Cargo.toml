@@ -19,6 +19,11 @@ chip8-core = { path = "../chip8-core" }
 eframe = "0.31"
 log = "0.4"
 
+# Cross-platform native file dialog. On native it opens the OS picker; on wasm
+# it triggers the browser's <input type=file>. Same crate, one call site — only
+# the spawn mechanism differs (a worker thread on native, spawn_local on web).
+rfd = "0.15"
+
 # Web-only: drives the async eframe startup. Stable, rarely breaks across
 # eframe versions.
 [target.'cfg(target_arch = "wasm32")'.dependencies]

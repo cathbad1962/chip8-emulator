@@ -5,10 +5,19 @@
 //! `fn main`s at the bottom differ. `cargo run` gives you the native build;
 //! `trunk serve` (in this directory) gives you the web build.
 
+use std::sync::{Arc, Mutex};
+
 // egui comes through eframe's re-export so the versions can never drift apart.
 use eframe::egui;
 
 use chip8_core::{Chip8, HEIGHT, WIDTH};
+
+/// Bytes the file picker hands back, shared between the picker task and the UI
+/// thread. The picker runs off the UI thread (a worker thread on native, an
+/// async task on web), so it can't touch the VM directly — it drops the loaded
+/// ROM in here and `update()` picks it up on the next frame. `None` means "no
+/// ROM waiting"; `take()`-ing it both reads and clears the slot.
+type RomDrop = Arc<Mutex<Option<Vec<u8>>>>;
 
 /// How many CPU instructions to run per displayed frame. The CPU clock is
 /// FASTER than the 60 Hz timer/frame clock — that's why we step many times here
@@ -30,9 +39,7 @@ const CYCLES_PER_FRAME: usize = 10;
 /// Edit these bytes and re-run — it's a fast, self-contained way to feel how
 /// opcodes move the machine. Replace the whole thing with a file picker or
 /// `include_bytes!("game.ch8")` once real ROMs are running.
-const DEMO_ROM: &[u8] = &[
-    0x60, 0x1C, 0x61, 0x0D, 0xA0, 0x78, 0xD0, 0x15, 0x12, 0x08,
-];
+const DEMO_ROM: &[u8] = &[0x60, 0x1C, 0x61, 0x0D, 0xA0, 0x78, 0xD0, 0x15, 0x12, 0x08];
 
 /// CHIP-8 has a 16-key hex keypad. The conventional mapping onto a QWERTY
 /// keyboard, laid out so the physical block matches the original 4x4 pad:
@@ -42,21 +49,78 @@ const DEMO_ROM: &[u8] = &[
 ///   7 8 9 E        A S D F
 ///   A 0 B F        Z X C V
 const KEYMAP: [(egui::Key, usize); 16] = [
-    (egui::Key::Num1, 0x1), (egui::Key::Num2, 0x2), (egui::Key::Num3, 0x3), (egui::Key::Num4, 0xC),
-    (egui::Key::Q,    0x4), (egui::Key::W,    0x5), (egui::Key::E,    0x6), (egui::Key::R,    0xD),
-    (egui::Key::A,    0x7), (egui::Key::S,    0x8), (egui::Key::D,    0x9), (egui::Key::F,    0xE),
-    (egui::Key::Z,    0xA), (egui::Key::X,    0x0), (egui::Key::C,    0xB), (egui::Key::V,    0xF),
+    (egui::Key::Num1, 0x1),
+    (egui::Key::Num2, 0x2),
+    (egui::Key::Num3, 0x3),
+    (egui::Key::Num4, 0xC),
+    (egui::Key::Q, 0x4),
+    (egui::Key::W, 0x5),
+    (egui::Key::E, 0x6),
+    (egui::Key::R, 0xD),
+    (egui::Key::A, 0x7),
+    (egui::Key::S, 0x8),
+    (egui::Key::D, 0x9),
+    (egui::Key::F, 0xE),
+    (egui::Key::Z, 0xA),
+    (egui::Key::X, 0x0),
+    (egui::Key::C, 0xB),
+    (egui::Key::V, 0xF),
 ];
 
 struct Chip8App {
     vm: Chip8,
+    /// Filled by the file picker, drained by `update()`. See [`RomDrop`].
+    pending_rom: RomDrop,
 }
 
 impl Chip8App {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let mut vm = Chip8::new();
         vm.load_rom(DEMO_ROM);
-        Self { vm }
+        Self {
+            vm,
+            pending_rom: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Open the OS/browser file dialog and, once the user picks a file, drop its
+    /// bytes into `pending_rom` for the next `update()` to load.
+    ///
+    /// The two targets differ only in *how* we get off the UI thread. Native:
+    /// `rfd::FileDialog` is blocking, so we run it on a throwaway thread and
+    /// read the file with `std::fs`. Web: there is no filesystem and we must
+    /// never block, so we use the async dialog and `spawn_local`, reading the
+    /// bytes straight out of the browser File object. Either way we then ask
+    /// eframe to repaint so the waiting bytes get noticed promptly.
+    fn open_rom_picker(&self, ctx: &egui::Context) {
+        let slot = self.pending_rom.clone();
+        let ctx = ctx.clone();
+
+        #[cfg(not(target_arch = "wasm32"))]
+        std::thread::spawn(move || {
+            if let Some(path) = rfd::FileDialog::new()
+                .add_filter("CHIP-8 ROM", &["ch8", "rom"])
+                .pick_file()
+            {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    *slot.lock().unwrap() = Some(bytes);
+                    ctx.request_repaint();
+                }
+            }
+        });
+
+        #[cfg(target_arch = "wasm32")]
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Some(file) = rfd::AsyncFileDialog::new()
+                .add_filter("CHIP-8 ROM", &["ch8", "rom"])
+                .pick_file()
+                .await
+            {
+                let bytes = file.read().await;
+                *slot.lock().unwrap() = Some(bytes);
+                ctx.request_repaint();
+            }
+        });
     }
 
     fn paint_screen(&self, ui: &mut egui::Ui) {
@@ -97,6 +161,29 @@ impl Chip8App {
 
 impl eframe::App for Chip8App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 0. LOAD — if the picker left a ROM waiting, swap in a fresh machine.
+        //    A new ROM means a new game, so we rebuild the VM from scratch
+        //    rather than poke bytes into the running one. `reseed` injects real
+        //    entropy here: the core's RNG is deterministic by design (no clock
+        //    below the line), so the shell — which *does* have a clock — is the
+        //    right place to make `CXNN` actually random. eframe's frame time is
+        //    a fine, dependency-free entropy source.
+        if let Some(rom) = self.pending_rom.lock().unwrap().take() {
+            let mut vm = Chip8::new();
+            vm.load_rom(&rom);
+            vm.reseed((ctx.input(|i| i.time) * 1_000_000.0) as u32);
+            self.vm = vm;
+        }
+
+        // Toolbar above the screen.
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Load ROM…").clicked() {
+                    self.open_rom_picker(ctx);
+                }
+            });
+        });
+
         // 1. INPUT — sample which keypad keys are held this frame.
         ctx.input(|input| {
             for (key, idx) in KEYMAP {
