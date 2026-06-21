@@ -5,10 +5,16 @@
 //! `fn main`s at the bottom differ. `cargo run` gives you the native build;
 //! `trunk serve` (in this directory) gives you the web build.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+// Audio backend imports differ by target (see the AUDIO section below).
+#[cfg(not(target_arch = "wasm32"))]
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+#[cfg(target_arch = "wasm32")]
+use eframe::wasm_bindgen::{closure::Closure, JsCast};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 // egui comes through eframe's re-export so the versions can never drift apart.
 use eframe::egui;
 
@@ -80,15 +86,27 @@ const KEYMAP: [(egui::Key, usize); 16] = [
     (egui::Key::V, 0xF),
 ];
 
-/// A 440 Hz square-wave beeper wired to the CHIP-8 sound timer. The core knows
-/// nothing about audio hardware — it only exposes `is_beeping()` (sound timer
-/// non-zero). The shell owns the actual output device.
-///
-/// cpal drives the speaker from its own real-time callback thread, so we can't
-/// push samples from `update()`. Instead the callback reads a shared atomic
-/// flag and the UI flips it once per frame. Same single-backend approach on
-/// native and web (cpal targets WebAudio on wasm) — only the build feature and,
-/// on the web, the autoplay rules differ (see the note in `Chip8App::new`).
+// ---------------------------------------------------------------------------
+// AUDIO — a 440 Hz square-wave beeper wired to the CHIP-8 sound timer. The core
+// knows nothing about audio hardware; it only exposes `is_beeping()` (sound
+// timer non-zero) and the shell owns the actual output device.
+//
+// This is the one piece that needs a genuinely different backend per target:
+//   • Native: cpal synthesises samples on its own real-time callback thread,
+//     gated by a shared atomic that the UI flips once per frame.
+//   • Web: there is no autoplay-free audio. We build a WebAudio graph
+//     (square oscillator → gain → speakers) via web_sys and beep by opening the
+//     gain gate. The browser starts the AudioContext *suspended*, so we resume
+//     it on the first user gesture — exactly the event context the autoplay
+//     policy demands, and one `update()` (a requestAnimationFrame tick) can
+//     never supply. cpal can't do this on wasm: it creates its context before
+//     any gesture and never re-resumes it, so the browser keeps it muted.
+//
+// Both expose the same tiny interface: `Beeper::new() -> Option<Self>` (audio is
+// a nice-to-have; failure just means silence) and `beeper.set(bool)`.
+// ---------------------------------------------------------------------------
+
+#[cfg(not(target_arch = "wasm32"))]
 struct Beeper {
     // The stream must stay alive for audio to keep flowing — dropping it stops
     // the device. We never touch it again, hence the leading underscore.
@@ -96,6 +114,7 @@ struct Beeper {
     on: Arc<AtomicBool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Beeper {
     /// Open the default output device and start a (silent) stream. Audio is a
     /// nice-to-have, so every failure path returns `None` and the app runs on in
@@ -165,6 +184,65 @@ impl Beeper {
     /// Flip the beep on or off. Called once per frame from `update()`.
     fn set(&self, beeping: bool) {
         self.on.store(beeping, Ordering::Relaxed);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+struct Beeper {
+    ctx: web_sys::AudioContext,
+    /// Master gain gate: 0.0 = silent, a small positive value = audible. The
+    /// oscillator runs forever; we beep by opening and closing this gate.
+    gain: web_sys::GainNode,
+    /// Kept alive for the Beeper's lifetime — dropping the closure would
+    /// unregister the gesture listener that resumes the audio context.
+    _resume: Closure<dyn FnMut()>,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Beeper {
+    /// Build the WebAudio graph (square oscillator → gain → speakers) and start
+    /// the oscillator running silently. `None` if WebAudio is unavailable.
+    fn new() -> Option<Self> {
+        let ctx = web_sys::AudioContext::new().ok()?;
+        let osc = ctx.create_oscillator().ok()?;
+        let gain = ctx.create_gain().ok()?;
+
+        osc.set_type(web_sys::OscillatorType::Square);
+        osc.frequency().set_value(440.0);
+        gain.gain().set_value(0.0); // start silent
+
+        osc.connect_with_audio_node(&gain).ok()?;
+        gain.connect_with_audio_node(&ctx.destination()).ok()?;
+        osc.start().ok()?;
+
+        // Resume the (suspended) context on the first real user gesture. A click
+        // or key press anywhere on the page is enough — and clicking "Load ROM…"
+        // counts, so sound is live before any game gets a chance to beep.
+        let ctx_for_resume = ctx.clone();
+        let resume = Closure::<dyn FnMut()>::new(move || {
+            let _ = ctx_for_resume.resume();
+        });
+        if let Some(win) = web_sys::window() {
+            let cb = resume.as_ref().unchecked_ref();
+            let _ = win.add_event_listener_with_callback("pointerdown", cb);
+            let _ = win.add_event_listener_with_callback("keydown", cb);
+        }
+
+        Some(Self {
+            ctx,
+            gain,
+            _resume: resume,
+        })
+    }
+
+    /// Open or close the gain gate. Called once per frame from `update()`. As a
+    /// safety net we also resume the context here if it's still suspended (cheap,
+    /// and a no-op once the gesture listener has done its job).
+    fn set(&self, beeping: bool) {
+        self.gain.gain().set_value(if beeping { 0.15 } else { 0.0 });
+        if beeping && self.ctx.state() == web_sys::AudioContextState::Suspended {
+            let _ = self.ctx.resume();
+        }
     }
 }
 
@@ -239,24 +317,26 @@ impl Chip8App {
     fn paint_screen(&self, ui: &mut egui::Ui) {
         let fb = self.vm.framebuffer();
 
-        // Largest scale that fits the available space, preserving the 2:1
-        // (64x32) aspect ratio. Each CHIP-8 pixel becomes a `scale`-sized
-        // square on screen.
-        let avail = ui.available_size();
-        let scale = (avail.x / WIDTH as f32)
-            .min(avail.y / HEIGHT as f32)
+        // Take the whole panel: we paint a black background edge-to-edge and
+        // centre the CHIP-8 image in it, so the window is always filled and the
+        // (letterboxed) image sits in the middle rather than the top-left.
+        let (panel, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::hover());
+        let panel = panel.rect;
+        painter.rect_filled(panel, 0.0, egui::Color32::BLACK);
+
+        // Largest scale that fits, preserving the 2:1 (64x32) aspect ratio. Each
+        // CHIP-8 pixel becomes a `scale`-sized square on screen.
+        let scale = (panel.width() / WIDTH as f32)
+            .min(panel.height() / HEIGHT as f32)
             .max(1.0);
 
-        let (response, painter) = ui.allocate_painter(
-            egui::vec2(WIDTH as f32 * scale, HEIGHT as f32 * scale),
-            egui::Sense::hover(),
-        );
-        let origin = response.rect.min;
+        // Centre the scaled image within the panel.
+        let image = egui::vec2(WIDTH as f32 * scale, HEIGHT as f32 * scale);
+        let origin = panel.center() - image / 2.0;
 
-        // Background, then one filled square per lit pixel. At 2048 cells this
-        // is free. (For a 160x144 Game Boy you'd switch to uploading the
-        // framebuffer as a nearest-filtered texture instead.)
-        painter.rect_filled(response.rect, 0.0, egui::Color32::BLACK);
+        // One filled square per lit pixel. At 2048 cells this is free. (For a
+        // 160x144 Game Boy you'd upload the framebuffer as a nearest-filtered
+        // texture instead.)
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
                 if fb[y * WIDTH + x] {
@@ -326,17 +406,21 @@ impl eframe::App for Chip8App {
             self.timer_accumulator = 0.0;
         }
 
-        // 3b. AUDIO — mirror the sound-timer state to the beeper. The actual
-        //     sample generation happens on cpal's callback thread; here we just
-        //     flip the on/off flag it reads.
+        // 3b. AUDIO — mirror the sound-timer state to the beeper each frame. The
+        //     beeper handles the actual sound (a cpal callback thread on native,
+        //     a WebAudio gain gate on the web); here we just tell it on or off.
         if let Some(beeper) = &self.beeper {
             beeper.set(self.vm.is_beeping());
         }
 
-        // 4. RENDER.
-        egui::CentralPanel::default().show(ctx, |ui| {
-            self.paint_screen(ui);
-        });
+        // 4. RENDER. A margin-free, black-filled panel so the emulator screen
+        //    reaches the window edges instead of sitting inside egui's default
+        //    padding.
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+            .show(ctx, |ui| {
+                self.paint_screen(ui);
+            });
 
         // 5. SCHEDULE THE NEXT FRAME. This is the key web-vs-native difference,
         //    made concrete: a native emulator owns `loop { step(); render(); }`,

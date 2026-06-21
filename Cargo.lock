@@ -720,6 +720,7 @@ dependencies = [
  "log",
  "rfd",
  "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]

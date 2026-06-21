@@ -24,16 +24,33 @@ log = "0.4"
 # the spawn mechanism differs (a worker thread on native, spawn_local on web).
 rfd = "0.15"
 
-# Cross-platform audio output for the beeper. Talks to the OS audio device on
-# native (ALSA/PulseAudio/etc.) and to WebAudio on wasm — one backend, one code
-# path. Native needs the ALSA dev headers to build (`libasound2-dev` on Debian/
-# Ubuntu); the wasm build needs cpal's `wasm-bindgen` feature (set below).
+# Audio is the one feature with a genuinely different backend per target (see the
+# AUDIO section in src/main.rs), so the two deps live in the target tables below.
+
+# Native-only: cpal talks straight to the OS audio device. Needs the ALSA dev
+# headers to build on Debian/Ubuntu (`libasound2-dev`).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cpal = "0.15"
 
-# Web-only: drives the async eframe startup. Stable, rarely breaks across
-# eframe versions.
+# Web-only.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+# Drives the async eframe startup. Stable, rarely breaks across eframe versions.
 wasm-bindgen-futures = "0.4"
-# cpal needs this feature to target the browser's WebAudio API. Cargo merges it
-# with the base `cpal` dep above, so the native build is unaffected.
-cpal = { version = "0.15", features = ["wasm-bindgen"] }
+# WebAudio, driven directly (cpal on wasm can't satisfy the browser autoplay
+# policy). These features pull in just the nodes we touch: a square oscillator →
+# gain → speakers, with the context resumed on a user gesture. web-sys unifies
+# with eframe's copy, so this only *adds* features to the same crate.
+web-sys = { version = "0.3", features = [
+    "AudioContext",
+    "AudioContextState",
+    "BaseAudioContext",
+    "AudioNode",
+    "AudioParam",
+    "AudioDestinationNode",
+    "AudioScheduledSourceNode",
+    "OscillatorNode",
+    "OscillatorType",
+    "GainNode",
+    "Window",
+    "EventTarget",
+] }

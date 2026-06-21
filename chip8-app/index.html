@@ -5,9 +5,30 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
     <title>CHIP-8</title>
     <style>
-        html, body { margin: 0; height: 100%; background: #0b0b0b; overflow: hidden; }
-        /* eframe sizes the canvas itself; just centre it. */
-        canvas { display: block; margin: 0 auto; }
+        /* eframe sizes the canvas's drawing buffer to fill its container each
+           frame, so the container (html/body) must actually span the viewport —
+           otherwise the canvas collapses to a small default size. This is the
+           eframe_template's fullscreen recipe: 100% html/body + an absolutely
+           positioned, centred canvas. */
+        html, body {
+            overflow: hidden;
+            margin: 0 !important;
+            padding: 0 !important;
+            height: 100%;
+            width: 100%;
+            background: #0b0b0b;
+        }
+        canvas {
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* Explicit size: without this the canvas falls back to the HTML
+               default of 300x150 and the app renders tiny. eframe reads this
+               box and sizes its drawing buffer to match. */
+            width: 100%;
+            height: 100%;
+        }
     </style>
 
     <!-- This line is the whole Trunk integration: it builds the Rust crate in
