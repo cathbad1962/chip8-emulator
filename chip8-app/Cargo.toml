@@ -24,7 +24,16 @@ log = "0.4"
 # the spawn mechanism differs (a worker thread on native, spawn_local on web).
 rfd = "0.15"
 
+# Cross-platform audio output for the beeper. Talks to the OS audio device on
+# native (ALSA/PulseAudio/etc.) and to WebAudio on wasm — one backend, one code
+# path. Native needs the ALSA dev headers to build (`libasound2-dev` on Debian/
+# Ubuntu); the wasm build needs cpal's `wasm-bindgen` feature (set below).
+cpal = "0.15"
+
 # Web-only: drives the async eframe startup. Stable, rarely breaks across
 # eframe versions.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4"
+# cpal needs this feature to target the browser's WebAudio API. Cargo merges it
+# with the base `cpal` dep above, so the native build is unaffected.
+cpal = { version = "0.15", features = ["wasm-bindgen"] }

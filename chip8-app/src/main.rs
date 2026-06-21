@@ -5,8 +5,10 @@
 //! `fn main`s at the bottom differ. `cargo run` gives you the native build;
 //! `trunk serve` (in this directory) gives you the web build.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 // egui comes through eframe's re-export so the versions can never drift apart.
 use eframe::egui;
 
@@ -67,19 +69,115 @@ const KEYMAP: [(egui::Key, usize); 16] = [
     (egui::Key::V, 0xF),
 ];
 
+/// A 440 Hz square-wave beeper wired to the CHIP-8 sound timer. The core knows
+/// nothing about audio hardware — it only exposes `is_beeping()` (sound timer
+/// non-zero). The shell owns the actual output device.
+///
+/// cpal drives the speaker from its own real-time callback thread, so we can't
+/// push samples from `update()`. Instead the callback reads a shared atomic
+/// flag and the UI flips it once per frame. Same single-backend approach on
+/// native and web (cpal targets WebAudio on wasm) — only the build feature and,
+/// on the web, the autoplay rules differ (see the note in `Chip8App::new`).
+struct Beeper {
+    // The stream must stay alive for audio to keep flowing — dropping it stops
+    // the device. We never touch it again, hence the leading underscore.
+    _stream: cpal::Stream,
+    on: Arc<AtomicBool>,
+}
+
+impl Beeper {
+    /// Open the default output device and start a (silent) stream. Audio is a
+    /// nice-to-have, so every failure path returns `None` and the app runs on in
+    /// silence rather than refusing to start.
+    fn new() -> Option<Self> {
+        let device = cpal::default_host().default_output_device()?;
+        let config = device.default_output_config().ok()?;
+        let on = Arc::new(AtomicBool::new(false));
+
+        // The device dictates the sample format; build the right one.
+        let stream = match config.sample_format() {
+            cpal::SampleFormat::F32 => Self::build::<f32>(&device, &config.into(), on.clone()),
+            cpal::SampleFormat::I16 => Self::build::<i16>(&device, &config.into(), on.clone()),
+            cpal::SampleFormat::U16 => Self::build::<u16>(&device, &config.into(), on.clone()),
+            _ => None,
+        }?;
+        stream.play().ok()?;
+        Some(Self {
+            _stream: stream,
+            on,
+        })
+    }
+
+    /// Build the output stream for one concrete sample format. The callback
+    /// synthesises the square wave on the fly, gated by the shared `on` flag.
+    fn build<T>(
+        device: &cpal::Device,
+        config: &cpal::StreamConfig,
+        on: Arc<AtomicBool>,
+    ) -> Option<cpal::Stream>
+    where
+        T: cpal::SizedSample + cpal::FromSample<f32>,
+    {
+        let channels = config.channels as usize;
+        let step = 440.0 / config.sample_rate.0 as f32; // phase advance per sample
+        let mut phase = 0.0f32;
+        device
+            .build_output_stream(
+                config,
+                move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+                    let playing = on.load(Ordering::Relaxed);
+                    for frame in data.chunks_mut(channels) {
+                        // Square wave at a gentle volume; flat silence when off.
+                        let v = if !playing {
+                            0.0
+                        } else if phase < 0.5 {
+                            0.15
+                        } else {
+                            -0.15
+                        };
+                        phase += step;
+                        if phase >= 1.0 {
+                            phase -= 1.0;
+                        }
+                        let sample = T::from_sample(v);
+                        for out in frame.iter_mut() {
+                            *out = sample; // same value to every channel (mono → all)
+                        }
+                    }
+                },
+                |err| log::error!("audio stream error: {err}"),
+                None,
+            )
+            .ok()
+    }
+
+    /// Flip the beep on or off. Called once per frame from `update()`.
+    fn set(&self, beeping: bool) {
+        self.on.store(beeping, Ordering::Relaxed);
+    }
+}
+
 struct Chip8App {
     vm: Chip8,
     /// Filled by the file picker, drained by `update()`. See [`RomDrop`].
     pending_rom: RomDrop,
+    /// Square-wave output mirroring the VM's sound timer. `None` if no audio
+    /// device could be opened — the emulator just runs silently.
+    beeper: Option<Beeper>,
 }
 
 impl Chip8App {
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let mut vm = Chip8::new();
         vm.load_rom(DEMO_ROM);
+        // Start audio now. On the web the AudioContext begins *suspended* under
+        // browser autoplay rules and only resumes after a user gesture — which
+        // happens naturally the first time the user clicks "Load ROM…" or
+        // presses a key, so by the time a game actually beeps, sound is live.
         Self {
             vm,
             pending_rom: Arc::new(Mutex::new(None)),
+            beeper: Beeper::new(),
         }
     }
 
@@ -200,6 +298,13 @@ impl eframe::App for Chip8App {
         //    (For frame-rate-independent accuracy, accumulate ctx.input(|i| i.stable_dt)
         //    and tick on each whole 1/60 s elapsed instead. Fine to skip for now.)
         self.vm.tick_timers();
+
+        // 3b. AUDIO — mirror the sound-timer state to the beeper. The actual
+        //     sample generation happens on cpal's callback thread; here we just
+        //     flip the on/off flag it reads.
+        if let Some(beeper) = &self.beeper {
+            beeper.set(self.vm.is_beeping());
+        }
 
         // 4. RENDER.
         egui::CentralPanel::default().show(ctx, |ui| {
